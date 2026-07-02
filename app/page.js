@@ -418,8 +418,178 @@ function LoanDetail({ loan, onClose, onRefresh, currency }) {
   );
 }
 
+function BulkPaymentDialog({ borrower, open, onClose, currency, onRefresh }) {
+  const [amount, setAmount] = useState('');
+  const [strategy, setStrategy] = useState('oldest');
+  const [method, setMethod] = useState('cash');
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [notes, setNotes] = useState('');
+  const [loanType, setLoanType] = useState('given');
+  const [preview, setPreview] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [manualMap, setManualMap] = useState({});
+
+  useEffect(() => {
+    if (!open) { setAmount(''); setPreview(null); setNotes(''); setStrategy('oldest'); setManualMap({}); }
+  }, [open]);
+
+  async function fetchPreview() {
+    if (!amount || Number(amount) <= 0) { setPreview(null); return; }
+    setLoading(true);
+    try {
+      const body = { amount: Number(amount), strategy, preview: true, loan_type: loanType };
+      if (strategy === 'manual') body.manual_allocations = Object.entries(manualMap).map(([loan_id, v]) => ({ loan_id, amount: Number(v) || 0 }));
+      const r = await api(`borrowers/${borrower.id}/bulk-repayment`, { method: 'POST', body: JSON.stringify(body) });
+      if (r.error) { toast.error(r.error); setPreview(null); }
+      else setPreview(r);
+    } finally { setLoading(false); }
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(fetchPreview, 300);
+    return () => clearTimeout(t);
+  }, [amount, strategy, loanType, manualMap, open]);
+
+  async function confirm() {
+    if (!preview || preview.allocations.length === 0) return toast.error('No allocations to save');
+    setLoading(true);
+    try {
+      const body = { amount: Number(amount), strategy, method, date, notes, loan_type: loanType };
+      if (strategy === 'manual') body.manual_allocations = Object.entries(manualMap).map(([loan_id, v]) => ({ loan_id, amount: Number(v) || 0 }));
+      const r = await api(`borrowers/${borrower.id}/bulk-repayment`, { method: 'POST', body: JSON.stringify(body) });
+      if (r.success) {
+        toast.success(`Bulk payment recorded — ${r.count} loan(s) updated${r.unallocated > 0 ? `, ${fmt(r.unallocated, currency)} unallocated` : ''}`);
+        onClose();
+        onRefresh();
+      } else {
+        toast.error(r.error || 'Failed');
+      }
+    } finally { setLoading(false); }
+  }
+
+  const symbol = CURRENCIES[preview?.currency || currency] || '';
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Wallet className="h-5 w-5 text-violet-600" />Bulk Payment from {borrower?.name}</DialogTitle>
+          <p className="text-xs text-slate-500 mt-1">Record a single lump-sum payment and auto-split it across their outstanding loans.</p>
+        </DialogHeader>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2 grid grid-cols-3 gap-3">
+            <div><Label>Amount</Label><Input type="number" placeholder="e.g. 8000" value={amount} onChange={e => setAmount(e.target.value)} autoFocus /></div>
+            <div><Label>Date</Label><Input type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
+            <div><Label>Method</Label>
+              <Select value={method} onValueChange={setMethod}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value="cash">Cash</SelectItem><SelectItem value="upi">UPI</SelectItem><SelectItem value="bank">Bank Transfer</SelectItem><SelectItem value="card">Card</SelectItem><SelectItem value="cheque">Cheque</SelectItem></SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div><Label>Allocation Strategy</Label>
+            <Select value={strategy} onValueChange={setStrategy}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="oldest">Oldest first (FIFO)</SelectItem>
+                <SelectItem value="newest">Newest first (LIFO)</SelectItem>
+                <SelectItem value="highest_interest">Highest interest first</SelectItem>
+                <SelectItem value="proportional">Proportional</SelectItem>
+                <SelectItem value="manual">Manual per loan</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div><Label>Loan Direction</Label>
+            <Select value={loanType} onValueChange={setLoanType}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="given">Money they owe me</SelectItem><SelectItem value="taken">Money I owe them</SelectItem></SelectContent>
+            </Select>
+          </div>
+          <div className="col-span-2"><Label>Notes</Label><Input placeholder="Optional note (appears on each generated repayment)" value={notes} onChange={e => setNotes(e.target.value)} /></div>
+        </div>
+
+        {/* Manual allocation inputs */}
+        {strategy === 'manual' && preview && (
+          <div className="border rounded-lg p-3 bg-slate-50">
+            <div className="text-xs font-semibold text-slate-600 mb-2">Enter amount for each loan:</div>
+            <div className="space-y-2">
+              {preview.eligible_loans.map(l => (
+                <div key={l.id} className="flex items-center justify-between gap-3">
+                  <div className="text-sm flex-1">
+                    <div className="font-medium">{new Date(l.loan_date).toLocaleDateString()} • {fmt(l.principal, l.currency)}</div>
+                    <div className="text-xs text-slate-500">Outstanding: {fmt(l.outstanding, l.currency)} • {l.interest_rate}% interest</div>
+                  </div>
+                  <Input type="number" placeholder="0" className="w-32" value={manualMap[l.id] || ''} onChange={e => setManualMap({ ...manualMap, [l.id]: e.target.value })} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Preview */}
+        {loading && <div className="text-xs text-slate-400 text-center py-3">Calculating allocation...</div>}
+
+        {preview && preview.allocations.length > 0 && (
+          <div className="border-2 border-violet-100 rounded-xl bg-gradient-to-br from-violet-50/50 to-fuchsia-50/50 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-600 to-fuchsia-600 flex items-center justify-center"><Zap className="h-4 w-4 text-white" /></div>
+              <div>
+                <div className="font-semibold text-sm">Allocation Preview</div>
+                <div className="text-xs text-slate-500">{preview.allocations.length} loan(s) will be updated</div>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {preview.allocations.map((a, i) => (
+                <div key={i} className="flex items-center justify-between p-2.5 bg-white rounded-lg border">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium">Loan from {new Date(a.loan_date).toLocaleDateString()}</div>
+                    <div className="text-xs text-slate-500">
+                      Outstanding: {fmt(a.loan_outstanding_before, preview.currency)} → {fmt(a.loan_outstanding_after, preview.currency)}
+                      {a.fully_settled && <span className="ml-1.5 inline-flex items-center rounded-full bg-emerald-100 text-emerald-700 px-1.5 py-0.5 text-[10px] font-semibold"><CheckCircle2 className="h-2.5 w-2.5 mr-0.5" />Settled</span>}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-bold text-violet-700">{fmt(a.amount, preview.currency)}</div>
+                    <div className="text-xs text-slate-500">applied</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 pt-3 border-t border-violet-200 flex justify-between text-sm">
+              <div>
+                <div className="text-xs text-slate-500">Total allocated</div>
+                <div className="font-bold text-violet-700">{fmt(preview.total_allocated, preview.currency)}</div>
+              </div>
+              {preview.unallocated > 0 && (
+                <div className="text-right">
+                  <div className="text-xs text-amber-600">Unallocated (all loans settled)</div>
+                  <div className="font-bold text-amber-700">{fmt(preview.unallocated, preview.currency)}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {preview && preview.allocations.length === 0 && !loading && (
+          <div className="text-center text-sm text-slate-500 py-4">Enter an amount above to see allocation preview.</div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={confirm} disabled={loading || !preview || preview.allocations.length === 0} className="bg-gradient-to-r from-violet-600 to-fuchsia-600">
+            <CheckCircle2 className="h-4 w-4 mr-2" />Confirm & Record
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function BorrowersView({ borrowers, currency, onRefresh }) {
   const [open, setOpen] = useState(false);
+  const [bulkFor, setBulkFor] = useState(null);
   const [form, setForm] = useState({ name: '', phone: '', email: '', address: '', notes: '', tags: [] });
 
   async function submit() {
@@ -468,7 +638,7 @@ function BorrowersView({ borrowers, currency, onRefresh }) {
                   <div><div className="text-xs text-slate-500">Outstanding</div><div className="font-bold text-red-600">{fmt(b.outstanding, currency)}</div></div>
                   <div><div className="text-xs text-slate-500">Active</div><div className="font-bold">{b.active_loans}</div></div>
                 </div>
-                <div className="mt-3 flex items-center justify-between">
+                <div className="mt-3 flex items-center justify-between gap-2">
                   <Badge variant="outline" className={
                     b.credit_score.label === 'Excellent' ? 'border-emerald-300 text-emerald-700 bg-emerald-50' :
                     b.credit_score.label === 'Good' ? 'border-blue-300 text-blue-700 bg-blue-50' :
@@ -477,12 +647,19 @@ function BorrowersView({ borrowers, currency, onRefresh }) {
                   }>
                     <BadgeCheck className="h-3 w-3 mr-1" />{b.credit_score.label} ({b.credit_score.score})
                   </Badge>
+                  {b.outstanding > 0 && (
+                    <Button size="sm" variant="outline" onClick={() => setBulkFor(b)} className="border-violet-200 text-violet-700 hover:bg-violet-50 hover:text-violet-800">
+                      <Wallet className="h-3.5 w-3.5 mr-1" />Bulk Payment
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>
           ))}
         </div>
       )}
+
+      {bulkFor && <BulkPaymentDialog borrower={bulkFor} open={!!bulkFor} onClose={() => setBulkFor(null)} currency={currency} onRefresh={onRefresh} />}
     </div>
   );
 }

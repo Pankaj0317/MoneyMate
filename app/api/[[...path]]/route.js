@@ -78,6 +78,46 @@ async function getUserFromReq() {
 
 const PUBLIC_ROUTES = ['health', 'auth'];
 
+// ---------- BULK REPAYMENT ALLOCATION ----------
+function allocateBulk(amount, loans, strategy, manualAllocations) {
+  if (strategy === 'manual' && Array.isArray(manualAllocations)) {
+    return manualAllocations
+      .filter(a => Number(a.amount) > 0)
+      .map(a => {
+        const loan = loans.find(l => l.id === a.loan_id);
+        const cap = loan?.computed?.outstanding || 0;
+        return { loan_id: a.loan_id, amount: Math.round(Math.min(Number(a.amount), cap) * 100) / 100 };
+      });
+  }
+
+  let sorted = [...loans];
+  if (strategy === 'oldest') sorted.sort((a, b) => new Date(a.loan_date) - new Date(b.loan_date));
+  else if (strategy === 'newest') sorted.sort((a, b) => new Date(b.loan_date) - new Date(a.loan_date));
+  else if (strategy === 'highest_interest') sorted.sort((a, b) => (Number(b.interest_rate) || 0) - (Number(a.interest_rate) || 0));
+  else if (strategy === 'proportional') {
+    const total = sorted.reduce((s, l) => s + l.computed.outstanding, 0);
+    if (total <= 0) return [];
+    const raw = sorted.map(l => ({ loan_id: l.id, amount: Math.round((l.computed.outstanding / total) * amount * 100) / 100 }));
+    const allocated = raw.reduce((s, a) => s + a.amount, 0);
+    if (raw.length > 0 && Math.abs(amount - allocated) > 0.001) {
+      raw[0].amount = Math.round((raw[0].amount + (amount - allocated)) * 100) / 100;
+    }
+    return raw;
+  }
+
+  let remaining = amount;
+  const out = [];
+  for (const l of sorted) {
+    if (remaining <= 0.01) break;
+    const alloc = Math.min(remaining, l.computed.outstanding);
+    if (alloc > 0.01) {
+      out.push({ loan_id: l.id, amount: Math.round(alloc * 100) / 100 });
+      remaining -= alloc;
+    }
+  }
+  return out;
+}
+
 function json(data, status = 200) {
   return NextResponse.json(data, { status });
 }
@@ -216,6 +256,107 @@ async function handleRoute(req, method, path) {
     if (path.length === 2 && method === 'DELETE') {
       await db.collection('borrowers').deleteOne({ id: path[1], user_id: uid });
       return json({ ok: true });
+    }
+    // Bulk repayment: POST /api/borrowers/:id/bulk-repayment  (body.preview=true for preview only)
+    if (path.length === 3 && path[2] === 'bulk-repayment' && method === 'POST') {
+      const borrowerId = path[1];
+      const borrower = await db.collection('borrowers').findOne({ id: borrowerId, user_id: uid });
+      if (!borrower) return json({ error: 'Borrower not found' }, 404);
+
+      const amount = Number(body.amount);
+      if (!amount || amount <= 0) return json({ error: 'Amount must be greater than 0' }, 400);
+
+      const strategy = body.strategy || 'oldest';
+      const preview = !!body.preview;
+      const loanType = body.loan_type || 'given';
+      const selectedLoanIds = Array.isArray(body.selected_loan_ids) && body.selected_loan_ids.length ? body.selected_loan_ids : null;
+
+      // Gather outstanding loans for this borrower
+      const rawLoans = await db.collection('loans').find({ user_id: uid, borrower_id: borrowerId, type: loanType }, { projection: { _id: 0 } }).toArray();
+      const loans = [];
+      for (const l of rawLoans) {
+        const reps = await db.collection('repayments').find({ loan_id: l.id }).toArray();
+        const computed = computeLoan(l, reps);
+        if (computed.outstanding > 0.01) loans.push({ ...l, computed });
+      }
+      const eligibleLoans = selectedLoanIds ? loans.filter(l => selectedLoanIds.includes(l.id)) : loans;
+      if (eligibleLoans.length === 0) return json({ error: 'No outstanding loans for this contact' }, 400);
+
+      const allocations = allocateBulk(amount, eligibleLoans, strategy, body.manual_allocations);
+      const totalAllocated = allocations.reduce((s, a) => s + a.amount, 0);
+      const unallocated = Math.max(0, Math.round((amount - totalAllocated) * 100) / 100);
+
+      // Build enriched preview with loan info
+      const enrichedAllocations = allocations.map(a => {
+        const loan = eligibleLoans.find(l => l.id === a.loan_id);
+        return {
+          ...a,
+          loan_principal: loan?.principal,
+          loan_outstanding_before: loan?.computed?.outstanding,
+          loan_outstanding_after: Math.max(0, Math.round((loan?.computed?.outstanding - a.amount) * 100) / 100),
+          loan_date: loan?.loan_date,
+          loan_interest_rate: loan?.interest_rate,
+          fully_settled: loan ? (loan.computed.outstanding - a.amount) <= 0.01 : false,
+        };
+      });
+
+      if (preview) {
+        return json({
+          borrower: { id: borrower.id, name: borrower.name },
+          amount,
+          strategy,
+          currency: eligibleLoans[0]?.currency || 'INR',
+          allocations: enrichedAllocations,
+          total_allocated: Math.round(totalAllocated * 100) / 100,
+          unallocated,
+          eligible_loans: eligibleLoans.map(l => ({ id: l.id, principal: l.principal, outstanding: l.computed.outstanding, loan_date: l.loan_date, interest_rate: l.interest_rate, days_elapsed: l.computed.days_elapsed, currency: l.currency })),
+        });
+      }
+
+      // Persist repayments
+      const bulkId = uuidv4();
+      const methodType = body.method || 'cash';
+      const date = body.date || new Date().toISOString();
+      const notes = body.notes || '';
+      const created = [];
+      for (const alloc of allocations) {
+        if (alloc.amount <= 0) continue;
+        const rep = {
+          id: uuidv4(),
+          user_id: uid,
+          loan_id: alloc.loan_id,
+          amount: alloc.amount,
+          method: methodType,
+          date,
+          notes: notes ? `[Bulk] ${notes}` : `[Bulk payment ${bulkId.slice(0, 8)}]`,
+          bulk_payment_id: bulkId,
+          created_at: new Date().toISOString(),
+        };
+        await db.collection('repayments').insertOne(rep);
+        created.push({ ...rep, _id: undefined });
+      }
+      // Store bulk record for audit
+      await db.collection('bulk_payments').insertOne({
+        id: bulkId,
+        user_id: uid,
+        borrower_id: borrowerId,
+        amount,
+        method: methodType,
+        date,
+        notes,
+        strategy,
+        allocations: enrichedAllocations,
+        unallocated,
+        created_at: new Date().toISOString(),
+      });
+      await logActivity(db, {
+        user_id: uid,
+        type: 'bulk_payment_received',
+        ref_id: bulkId,
+        borrower_id: borrowerId,
+        message: `Bulk payment of ${eligibleLoans[0]?.currency || 'INR'} ${amount} from ${borrower.name} split across ${created.length} loan(s)${unallocated > 0 ? ` (${unallocated} unallocated)` : ''}`,
+      });
+      return json({ success: true, bulk_payment_id: bulkId, allocations: created, count: created.length, unallocated }, 201);
     }
   }
 
