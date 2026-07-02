@@ -490,6 +490,23 @@ Please settle at your earliest convenience. Reply to this email if you have any 
     }
   }
 
+  // ---------- ACTIVITY LOGS ----------
+  if (path[0] === 'activity' && method === 'GET') {
+    const limit = Math.min(parseInt(q.limit || '200'), 500);
+    const typeFilter = q.type;
+    const filter = { user_id: uid };
+    if (typeFilter && typeFilter !== 'all') filter.type = typeFilter;
+    const logs = await db.collection('activity_logs').find(filter, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(limit).toArray();
+    // Enrich with borrower name
+    const borrowerIds = [...new Set(logs.map(l => l.borrower_id).filter(Boolean))];
+    const borrowers = borrowerIds.length ? await db.collection('borrowers').find({ id: { $in: borrowerIds }, user_id: uid }).toArray() : [];
+    const bMap = Object.fromEntries(borrowers.map(b => [b.id, b.name]));
+    return json({
+      logs: logs.map(l => ({ ...l, borrower_name: l.borrower_id ? bMap[l.borrower_id] : null })),
+      total: logs.length,
+    });
+  }
+
   // ---------- EXPENSES ----------
   if (path[0] === 'expenses') {
     if (path.length === 1 && method === 'GET') {

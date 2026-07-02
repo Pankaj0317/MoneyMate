@@ -68,6 +68,7 @@ function Sidebar({ tab, setTab, user, onLogout }) {
     { id: 'expenses', label: 'Expenses', icon: Receipt },
     { id: 'income', label: 'Income', icon: DollarSign },
     { id: 'calendar', label: 'Calendar', icon: CalIcon },
+    { id: 'activity', label: 'Activity Log', icon: Bell },
     { id: 'ai', label: 'AI Insights', icon: Sparkles },
   ];
   return (
@@ -1002,6 +1003,116 @@ function CalendarView({ currency, onOpenLoan }) {
   );
 }
 
+function ActivityView({ currency }) {
+  const [logs, setLogs] = useState([]);
+  const [filter, setFilter] = useState('all');
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    setLoading(true);
+    const r = await api(`activity?type=${filter}&limit=300`);
+    setLogs(r.logs || []);
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, [filter]);
+
+  const typeMap = {
+    loan_created: { icon: Wallet, color: 'from-violet-500 to-fuchsia-500', bg: 'bg-violet-50', text: 'text-violet-700', label: 'Loan Created' },
+    payment_received: { icon: ArrowDownLeft, color: 'from-emerald-500 to-teal-500', bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Payment' },
+    bulk_payment_received: { icon: Zap, color: 'from-fuchsia-500 to-pink-500', bg: 'bg-fuchsia-50', text: 'text-fuchsia-700', label: 'Bulk Payment' },
+    reminder_sent: { icon: Mail, color: 'from-blue-500 to-indigo-500', bg: 'bg-blue-50', text: 'text-blue-700', label: 'Reminder Sent' },
+    borrower_created: { icon: Users, color: 'from-slate-500 to-slate-600', bg: 'bg-slate-50', text: 'text-slate-700', label: 'Contact Added' },
+  };
+
+  const filters = [
+    { id: 'all', label: 'All Activity' },
+    { id: 'loan_created', label: 'Loans' },
+    { id: 'payment_received', label: 'Payments' },
+    { id: 'bulk_payment_received', label: 'Bulk Payments' },
+    { id: 'reminder_sent', label: 'Reminders' },
+    { id: 'borrower_created', label: 'Contacts' },
+  ];
+
+  // Group logs by date
+  const grouped = useMemo(() => {
+    const g = {};
+    for (const l of logs) {
+      const d = new Date(l.created_at);
+      const today = new Date();
+      const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+      let key;
+      if (d.toDateString() === today.toDateString()) key = 'Today';
+      else if (d.toDateString() === yesterday.toDateString()) key = 'Yesterday';
+      else key = d.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+      (g[key] = g[key] || []).push(l);
+    }
+    return g;
+  }, [logs]);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold flex items-center gap-2"><Bell className="h-7 w-7 text-violet-600" />Activity Log</h1>
+          <p className="text-sm text-slate-500 mt-1">Complete audit trail — every loan, payment, reminder, and change.</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={load}>Refresh</Button>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {filters.map(f => (
+          <button key={f.id} onClick={() => setFilter(f.id)}
+            className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${filter === f.id ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow' : 'bg-white border text-slate-600 hover:bg-slate-50'}`}>
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="text-center text-slate-400 py-16">Loading activity...</div>
+      ) : logs.length === 0 ? (
+        <Card><CardContent className="p-12 text-center"><Bell className="h-12 w-12 mx-auto text-slate-300 mb-3" /><p className="text-slate-500">No activity yet. Start by adding a contact or loan.</p></CardContent></Card>
+      ) : (
+        <div className="space-y-6">
+          {Object.entries(grouped).map(([date, items]) => (
+            <div key={date}>
+              <div className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3 px-1">{date}</div>
+              <Card>
+                <CardContent className="p-0 divide-y">
+                  {items.map((l, i) => {
+                    const meta = typeMap[l.type] || { icon: Bell, color: 'from-slate-500 to-slate-600', bg: 'bg-slate-50', text: 'text-slate-700', label: l.type };
+                    const Ic = meta.icon;
+                    const time = new Date(l.created_at);
+                    return (
+                      <div key={l.id || i} className="flex items-start gap-3 p-4 hover:bg-slate-50/50">
+                        <div className={`h-10 w-10 rounded-lg bg-gradient-to-br ${meta.color} flex items-center justify-center flex-shrink-0`}>
+                          <Ic className="h-4.5 w-4.5 text-white" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Badge variant="outline" className={`${meta.bg} ${meta.text} border-0 text-[10px] uppercase tracking-wider font-semibold`}>{meta.label}</Badge>
+                            {l.borrower_name && <span className="text-xs text-slate-500">• {l.borrower_name}</span>}
+                          </div>
+                          <div className="text-sm mt-1 text-slate-800">{l.message}</div>
+                          <div className="text-xs text-slate-400 mt-1">
+                            {time.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}
+                            {l.ref_id && <span className="ml-2 font-mono">#{l.ref_id.slice(0, 8)}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -1065,7 +1176,7 @@ function App() {
 
         {/* Mobile nav */}
         <div className="md:hidden flex overflow-x-auto gap-1 p-2 border-b bg-white">
-          {[['dashboard', 'Dashboard'], ['loans', 'Loans'], ['borrowers', 'Contacts'], ['expenses', 'Expenses'], ['income', 'Income'], ['calendar', 'Calendar'], ['ai', 'AI']].map(([id, l]) => (
+          {[['dashboard', 'Dashboard'], ['loans', 'Loans'], ['borrowers', 'Contacts'], ['expenses', 'Expenses'], ['income', 'Income'], ['calendar', 'Calendar'], ['activity', 'Activity'], ['ai', 'AI']].map(([id, l]) => (
             <button key={id} onClick={() => setTab(id)} className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === id ? 'bg-violet-600 text-white' : 'bg-slate-100'}`}>{l}</button>
           ))}
         </div>
@@ -1077,6 +1188,7 @@ function App() {
           {tab === 'expenses' && <ExpensesView items={expenses} currency={currency} onRefresh={refresh} />}
           {tab === 'income' && <IncomeView items={income} currency={currency} onRefresh={refresh} />}
           {tab === 'calendar' && <CalendarView currency={currency} onOpenLoan={setActiveLoan} />}
+          {tab === 'activity' && <ActivityView currency={currency} />}
           {tab === 'ai' && <AIView />}
         </div>
 
