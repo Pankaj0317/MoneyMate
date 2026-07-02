@@ -592,6 +592,7 @@ function BorrowersView({ borrowers, currency, onRefresh, initialFocusId }) {
   const [open, setOpen] = useState(false);
   const [bulkFor, setBulkFor] = useState(null);
   const [editFor, setEditFor] = useState(null);
+  const [reminderFor, setReminderFor] = useState(null);
   const [form, setForm] = useState({ name: '', phone: '', email: '', address: '', notes: '', tags: [] });
 
   async function submit() {
@@ -650,7 +651,7 @@ function BorrowersView({ borrowers, currency, onRefresh, initialFocusId }) {
                   <div><div className="text-xs text-slate-500">Outstanding</div><div className="font-bold text-red-600">{fmt(b.outstanding, currency)}</div></div>
                   <div><div className="text-xs text-slate-500">Active</div><div className="font-bold">{b.active_loans}</div></div>
                 </div>
-                <div className="mt-3 flex items-center justify-between gap-2">
+                <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
                   <Badge variant="outline" className={
                     b.credit_score.label === 'Excellent' ? 'border-emerald-300 text-emerald-700 bg-emerald-50' :
                     b.credit_score.label === 'Good' ? 'border-blue-300 text-blue-700 bg-blue-50' :
@@ -659,11 +660,18 @@ function BorrowersView({ borrowers, currency, onRefresh, initialFocusId }) {
                   }>
                     <BadgeCheck className="h-3 w-3 mr-1" />{b.credit_score.label} ({b.credit_score.score})
                   </Badge>
-                  {b.outstanding > 0 && (
-                    <Button size="sm" variant="outline" onClick={() => setBulkFor(b)} className="border-violet-200 text-violet-700 hover:bg-violet-50 hover:text-violet-800">
-                      <Wallet className="h-3.5 w-3.5 mr-1" />Bulk Payment
-                    </Button>
-                  )}
+                  <div className="flex gap-1.5">
+                    {b.outstanding > 0 && (
+                      <Button size="sm" variant="outline" onClick={() => setReminderFor(b)} className="border-blue-200 text-blue-700 hover:bg-blue-50 hover:text-blue-800">
+                        <Mail className="h-3.5 w-3.5 mr-1" />Remind
+                      </Button>
+                    )}
+                    {b.outstanding > 0 && (
+                      <Button size="sm" variant="outline" onClick={() => setBulkFor(b)} className="border-violet-200 text-violet-700 hover:bg-violet-50 hover:text-violet-800">
+                        <Wallet className="h-3.5 w-3.5 mr-1" />Bulk Payment
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -673,7 +681,55 @@ function BorrowersView({ borrowers, currency, onRefresh, initialFocusId }) {
 
       {bulkFor && <BulkPaymentDialog borrower={bulkFor} open={!!bulkFor} onClose={() => setBulkFor(null)} currency={currency} onRefresh={onRefresh} />}
       {editFor && <EditContactDialog borrower={editFor} open={!!editFor} onClose={() => setEditFor(null)} onRefresh={onRefresh} />}
+      {reminderFor && <ConsolidatedReminderDialog borrower={reminderFor} open={!!reminderFor} onClose={() => setReminderFor(null)} currency={currency} onRefresh={onRefresh} />}
     </div>
+  );
+}
+
+function ConsolidatedReminderDialog({ borrower, open, onClose, currency, onRefresh }) {
+  const [to, setTo] = useState(borrower.email || '');
+  const [message, setMessage] = useState('');
+  const [sending, setSending] = useState(false);
+
+  async function send() {
+    if (!to) return toast.error('Recipient email required');
+    setSending(true);
+    try {
+      const r = await api(`borrowers/${borrower.id}/reminder`, { method: 'POST', body: JSON.stringify({ to, message }) });
+      if (r.success) {
+        toast.success(`Reminder sent to ${to} — ${r.loan_count} loan(s), ${fmt(r.total_outstanding, currency)} outstanding`);
+        onClose();
+        onRefresh();
+      } else {
+        toast.error(r.error || 'Failed to send');
+      }
+    } finally { setSending(false); }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Mail className="h-5 w-5 text-blue-600" />Consolidated Reminder — {borrower.name}</DialogTitle>
+          <p className="text-xs text-slate-500 mt-1">Send a single email covering <strong>all {borrower.active_loans} outstanding loan{borrower.active_loans > 1 ? 's' : ''}</strong> with the grand total.</p>
+        </DialogHeader>
+        <div className="rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 p-4 border border-blue-100">
+          <div className="text-xs text-blue-800 uppercase tracking-wider font-semibold">Total Outstanding</div>
+          <div className="text-3xl font-bold text-blue-900 mt-1">{fmt(borrower.outstanding, currency)}</div>
+          <div className="text-xs text-blue-700 mt-1">across {borrower.active_loans} active loan{borrower.active_loans > 1 ? 's' : ''}</div>
+        </div>
+        <div className="space-y-3">
+          <div><Label>Recipient Email</Label><Input type="email" placeholder="borrower@example.com" value={to} onChange={e => setTo(e.target.value)} /></div>
+          <div><Label>Personal Message (optional)</Label><Textarea placeholder="e.g. Please clear the pending amount by end of month" value={message} onChange={e => setMessage(e.target.value)} rows={3} /></div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={send} disabled={sending || !to} className="bg-gradient-to-r from-blue-600 to-indigo-600">
+            <Send className="h-4 w-4 mr-2" />{sending ? 'Sending...' : 'Send Consolidated Reminder'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

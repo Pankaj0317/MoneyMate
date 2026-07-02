@@ -257,9 +257,113 @@ async function handleRoute(req, method, path) {
       await db.collection('borrowers').deleteOne({ id: path[1], user_id: uid });
       return json({ ok: true });
     }
-    // Bulk repayment: POST /api/borrowers/:id/bulk-repayment  (body.preview=true for preview only)
-    if (path.length === 3 && path[2] === 'bulk-repayment' && method === 'POST') {
+    // Consolidated reminder: POST /api/borrowers/:id/reminder  (sends 1 email covering all outstanding loans)
+    if (path.length === 3 && path[2] === 'reminder' && method === 'POST') {
       const borrowerId = path[1];
+      const borrower = await db.collection('borrowers').findOne({ id: borrowerId, user_id: uid });
+      if (!borrower) return json({ error: 'Contact not found' }, 404);
+      const toEmail = body.to || borrower.email;
+      if (!toEmail) return json({ error: 'No email on contact. Add one first or provide "to".' }, 400);
+
+      // Gather all outstanding loans (type=given)
+      const rawLoans = await db.collection('loans').find({ user_id: uid, borrower_id: borrowerId, type: 'given' }, { projection: { _id: 0 } }).toArray();
+      const loans = [];
+      for (const l of rawLoans) {
+        const reps = await db.collection('repayments').find({ loan_id: l.id }).toArray();
+        const computed = computeLoan(l, reps);
+        if (computed.outstanding > 0.01) loans.push({ ...l, computed });
+      }
+      if (loans.length === 0) return json({ error: 'No outstanding loans for this contact' }, 400);
+
+      const currency = loans[0].currency;
+      const symbol = { INR: '\u20b9', USD: '$', EUR: '\u20ac', GBP: '\u00a3', AED: 'AED ' }[currency] || '';
+      const grandTotal = loans.reduce((s, l) => s + l.computed.outstanding, 0);
+      const totalPrincipal = loans.reduce((s, l) => s + l.principal, 0);
+      const totalInterest = loans.reduce((s, l) => s + l.computed.interest, 0);
+      const totalPaid = loans.reduce((s, l) => s + l.computed.total_paid, 0);
+      const overdueCount = loans.filter(l => l.computed.status === 'overdue').length;
+
+      const loanRows = loans.map((l, i) => {
+        const dueStr = l.due_date ? new Date(l.due_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not set';
+        const overdue = l.computed.status === 'overdue';
+        return `<tr style="border-bottom:1px solid #f1f5f9;">
+<td style="padding:12px 8px;font-size:13px;">
+  <div style="font-weight:600;color:#1e293b;">Loan ${i + 1} <span style="font-family:monospace;font-size:11px;color:#94a3b8;">#${l.id.slice(0, 8)}</span></div>
+  <div style="color:#64748b;font-size:11px;margin-top:2px;">Taken ${new Date(l.loan_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} \u2022 Due ${dueStr}${overdue ? ' <span style="color:#dc2626;font-weight:600;">\u26A0 OVERDUE</span>' : ''}</div>
+</td>
+<td style="padding:12px 8px;font-size:13px;text-align:right;color:#64748b;">${symbol}${l.principal.toLocaleString('en-IN')}</td>
+<td style="padding:12px 8px;font-size:13px;text-align:right;color:#059669;font-weight:600;">${symbol}${l.computed.interest.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+<td style="padding:12px 8px;font-size:13px;text-align:right;color:#b91c1c;font-weight:700;">${symbol}${l.computed.outstanding.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+</tr>`;
+      }).join('');
+
+      const html = `<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#f8fafc;margin:0;padding:32px 16px;">
+<table style="max-width:640px;margin:0 auto;background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,0.06);overflow:hidden;">
+<tr><td style="background:linear-gradient(135deg,#8b5cf6,#d946ef);padding:32px 28px;color:#fff;">
+<div style="font-size:12px;letter-spacing:2px;opacity:.85;">MONEYMATE \u2022 CONSOLIDATED PAYMENT REMINDER</div>
+<div style="font-size:26px;font-weight:700;margin-top:8px;">Hi ${borrower.name},</div>
+<div style="opacity:.9;margin-top:6px;">You currently have <strong>${loans.length} outstanding loan${loans.length > 1 ? 's' : ''}</strong> with a total balance due.</div></td></tr>
+<tr><td style="padding:28px;">
+<div style="background:linear-gradient(135deg,#fef2f2,#fff1f2);border:1px solid #fecaca;border-radius:12px;padding:24px;text-align:center;">
+<div style="font-size:12px;color:#991b1b;text-transform:uppercase;letter-spacing:1px;font-weight:600;">Total Outstanding</div>
+<div style="font-size:42px;font-weight:800;color:#b91c1c;margin-top:6px;letter-spacing:-1px;">${symbol}${grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</div>
+<div style="font-size:13px;color:#7f1d1d;margin-top:4px;">across ${loans.length} loan${loans.length > 1 ? 's' : ''}${overdueCount > 0 ? ` \u2022 <strong style="color:#dc2626;">${overdueCount} overdue</strong>` : ''}</div>
+</div>
+
+<div style="margin-top:28px;">
+<div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:1.5px;font-weight:600;margin-bottom:12px;">Loan Breakdown</div>
+<table style="width:100%;border-collapse:collapse;">
+<thead><tr style="background:#f8fafc;">
+<th style="padding:10px 8px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:1px;font-weight:600;">Loan</th>
+<th style="padding:10px 8px;text-align:right;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:1px;font-weight:600;">Principal</th>
+<th style="padding:10px 8px;text-align:right;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:1px;font-weight:600;">Interest</th>
+<th style="padding:10px 8px;text-align:right;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:1px;font-weight:600;">Outstanding</th>
+</tr></thead>
+<tbody>${loanRows}</tbody>
+<tfoot><tr style="border-top:2px solid #e2e8f0;background:#faf5ff;">
+<td style="padding:14px 8px;font-size:13px;font-weight:700;color:#7c3aed;">Total</td>
+<td style="padding:14px 8px;font-size:13px;text-align:right;font-weight:700;color:#7c3aed;">${symbol}${totalPrincipal.toLocaleString('en-IN')}</td>
+<td style="padding:14px 8px;font-size:13px;text-align:right;font-weight:700;color:#059669;">${symbol}${totalInterest.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+<td style="padding:14px 8px;font-size:14px;text-align:right;font-weight:800;color:#b91c1c;">${symbol}${grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+</tr></tfoot>
+</table>
+</div>
+
+<div style="margin-top:20px;padding:14px;background:#eff6ff;border-radius:10px;font-size:12px;color:#1e40af;">
+<strong>Already paid:</strong> ${symbol}${totalPaid.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+</div>
+
+<div style="margin-top:24px;padding:16px;background:#f8fafc;border-radius:10px;font-size:13px;color:#475569;line-height:1.6;">
+${body.message ? `<strong>Note:</strong> ${body.message}<br/>` : ''}
+Please settle at your earliest convenience. You can make a single lump-sum payment to clear multiple loans at once — feel free to reply to this email with any questions.
+</div>
+
+<div style="margin-top:28px;text-align:center;color:#94a3b8;font-size:12px;">Sent via MoneyMate \u2014 Smart Expense & Loan Manager</div>
+</td></tr></table></body></html>`;
+
+      try {
+        const result = await resend.emails.send({
+          from: 'MoneyMate <onboarding@resend.dev>',
+          to: [toEmail],
+          subject: `Payment reminder \u2014 ${symbol}${grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })} outstanding across ${loans.length} loan${loans.length > 1 ? 's' : ''}${overdueCount > 0 ? ` (${overdueCount} overdue)` : ''}`,
+          html,
+        });
+        if (result.error) throw new Error(result.error.message || JSON.stringify(result.error));
+        await logActivity(db, {
+          user_id: uid,
+          type: 'reminder_sent',
+          ref_id: borrowerId,
+          borrower_id: borrowerId,
+          message: `Consolidated reminder sent to ${toEmail} (${symbol}${grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })} across ${loans.length} loan${loans.length > 1 ? 's' : ''})`,
+        });
+        return json({ success: true, to: toEmail, id: result.data?.id, loan_count: loans.length, total_outstanding: grandTotal });
+      } catch (e) {
+        console.error('consolidated reminder error', e);
+        return json({ error: e.message || 'Failed to send email' }, 500);
+      }
+    }
+    // Bulk repayment: POST /api/borrowers/:id/bulk-repayment  (body.preview=true for preview only)
+    if (path.length === 3 && path[2] === 'bulk-repayment' && method === 'POST') {      const borrowerId = path[1];
       const borrower = await db.collection('borrowers').findOne({ id: borrowerId, user_id: uid });
       if (!borrower) return json({ error: 'Borrower not found' }, 404);
 
@@ -448,7 +552,7 @@ async function handleRoute(req, method, path) {
       const html = `<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#f8fafc;margin:0;padding:32px 16px;">
 <table style="max-width:560px;margin:0 auto;background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,0.06);overflow:hidden;">
 <tr><td style="background:linear-gradient(135deg,#8b5cf6,#d946ef);padding:32px 28px;color:#fff;">
-<div style="font-size:12px;letter-spacing:2px;opacity:.85;">LEDGR \u2022 PAYMENT REMINDER</div>
+<div style="font-size:12px;letter-spacing:2px;opacity:.85;">MONEYMATE • PAYMENT REMINDER</div>
 <div style="font-size:26px;font-weight:700;margin-top:8px;">Hi ${borrower?.name || 'there'},</div>
 <div style="opacity:.9;margin-top:6px;">A quick reminder about your outstanding balance.</div></td></tr>
 <tr><td style="padding:28px;">
@@ -464,12 +568,12 @@ async function handleRoute(req, method, path) {
 <div style="margin-top:24px;padding:16px;background:#f8fafc;border-radius:10px;font-size:13px;color:#475569;line-height:1.6;">
 ${loan.notes ? `<div style="margin-bottom:8px;"><strong>Note:</strong> ${loan.notes}</div>` : ''}
 Please settle at your earliest convenience. Reply to this email if you have any questions.</div>
-<div style="margin-top:28px;text-align:center;color:#94a3b8;font-size:12px;">Sent via Ledgr \u2014 Smart Expense & Loan Manager</div>
+<div style="margin-top:28px;text-align:center;color:#94a3b8;font-size:12px;">Sent via MoneyMate — Smart Expense & Loan Manager</div>
 </td></tr></table></body></html>`;
 
       try {
         const result = await resend.emails.send({
-          from: 'Ledgr <onboarding@resend.dev>',
+          from: 'MoneyMate <onboarding@resend.dev>',
           to: [toEmail],
           subject: `Payment reminder \u2014 ${symbol}${computed.outstanding.toLocaleString('en-IN', { maximumFractionDigits: 2 })} outstanding${loan.due_date ? ` (due ${dueStr})` : ''}`,
           html,
