@@ -21,7 +21,7 @@ import {
   Wallet, TrendingUp, TrendingDown, Users, ArrowUpRight, ArrowDownLeft, PlusCircle, Sparkles,
   Receipt, DollarSign, AlertTriangle, CheckCircle2, Clock, Trash2, Calendar as CalIcon, IndianRupee,
   ChevronRight, Zap, Brain, Target, Bell, BadgeCheck, BadgeAlert, Search, Mail, LogOut, LogIn,
-  ChevronLeft, Send, Download
+  ChevronLeft, Send, Download, Pencil, X
 } from 'lucide-react';
 
 const CURRENCIES = { INR: '₹', USD: '$', EUR: '€', GBP: '£', AED: 'AED ' };
@@ -74,9 +74,9 @@ function Sidebar({ tab, setTab, user, onLogout }) {
   return (
     <aside className="hidden md:flex w-60 flex-col border-r bg-gradient-to-b from-slate-50 to-white p-4">
       <div className="flex items-center gap-2 px-2 py-3">
-        <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-600 to-fuchsia-600 flex items-center justify-center text-white font-bold shadow-md">L</div>
+        <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-600 to-fuchsia-600 flex items-center justify-center text-white font-bold shadow-md">M</div>
         <div>
-          <div className="font-bold text-slate-900">Ledgr</div>
+          <div className="font-bold text-slate-900">MoneyMate</div>
           <div className="text-[10px] text-slate-500 uppercase tracking-wider">AI Finance</div>
         </div>
       </div>
@@ -588,15 +588,22 @@ function BulkPaymentDialog({ borrower, open, onClose, currency, onRefresh }) {
   );
 }
 
-function BorrowersView({ borrowers, currency, onRefresh }) {
+function BorrowersView({ borrowers, currency, onRefresh, initialFocusId }) {
   const [open, setOpen] = useState(false);
   const [bulkFor, setBulkFor] = useState(null);
+  const [editFor, setEditFor] = useState(null);
   const [form, setForm] = useState({ name: '', phone: '', email: '', address: '', notes: '', tags: [] });
 
   async function submit() {
     if (!form.name) return toast.error('Name required');
     const r = await api('borrowers', { method: 'POST', body: JSON.stringify(form) });
     if (r.id) { toast.success('Contact added'); setOpen(false); setForm({ name: '', phone: '', email: '', address: '', notes: '', tags: [] }); onRefresh(); }
+  }
+
+  async function del(id, name) {
+    if (!confirm(`Delete contact "${name}"? Their loans and payments will remain but become unlinked.`)) return;
+    const r = await api(`borrowers/${id}`, { method: 'DELETE' });
+    if (r.ok) { toast.success('Contact deleted'); onRefresh(); }
   }
 
   return (
@@ -630,9 +637,13 @@ function BorrowersView({ borrowers, currency, onRefresh }) {
               <CardContent className="p-5">
                 <div className="flex items-center gap-3">
                   <Avatar className="h-12 w-12"><AvatarFallback className="bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white">{b.name[0].toUpperCase()}</AvatarFallback></Avatar>
-                  <div className="flex-1">
-                    <div className="font-semibold">{b.name}</div>
-                    <div className="text-xs text-slate-500">{b.phone || b.email || 'No contact info'}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold truncate">{b.name}</div>
+                    <div className="text-xs text-slate-500 truncate">{b.phone || b.email || 'No contact info'}</div>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <Button size="icon" variant="ghost" onClick={() => setEditFor(b)} title="Edit contact" className="h-7 w-7"><Pencil className="h-3.5 w-3.5 text-slate-500" /></Button>
+                    <Button size="icon" variant="ghost" onClick={() => del(b.id, b.name)} title="Delete contact" className="h-7 w-7"><Trash2 className="h-3.5 w-3.5 text-slate-400" /></Button>
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
@@ -661,14 +672,60 @@ function BorrowersView({ borrowers, currency, onRefresh }) {
       )}
 
       {bulkFor && <BulkPaymentDialog borrower={bulkFor} open={!!bulkFor} onClose={() => setBulkFor(null)} currency={currency} onRefresh={onRefresh} />}
+      {editFor && <EditContactDialog borrower={editFor} open={!!editFor} onClose={() => setEditFor(null)} onRefresh={onRefresh} />}
     </div>
   );
 }
 
+function EditContactDialog({ borrower, open, onClose, onRefresh }) {
+  const [form, setForm] = useState({
+    name: borrower.name || '',
+    phone: borrower.phone || '',
+    email: borrower.email || '',
+    address: borrower.address || '',
+    notes: borrower.notes || '',
+    tags: borrower.tags || [],
+  });
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    if (!form.name) return toast.error('Name required');
+    setSaving(true);
+    try {
+      const r = await api(`borrowers/${borrower.id}`, { method: 'PUT', body: JSON.stringify(form) });
+      if (r.ok) { toast.success('Contact updated'); onClose(); onRefresh(); }
+      else toast.error(r.error || 'Failed to update');
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent>
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><Pencil className="h-4 w-4 text-violet-600" />Edit Contact</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div><Label>Full Name</Label><Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><Label>Phone</Label><Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
+            <div><Label>Email</Label><Input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
+          </div>
+          <div><Label>Address</Label><Input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} /></div>
+          <div><Label>Notes</Label><Textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} disabled={saving} className="bg-gradient-to-r from-violet-600 to-fuchsia-600">{saving ? 'Saving...' : 'Save Changes'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ExpensesView({ items, currency, onRefresh }) {
-  const [form, setForm] = useState({ category: 'Food', amount: '', date: new Date().toISOString().slice(0, 10), notes: '', method: 'cash' });
+  const today = new Date().toISOString().slice(0, 10);
+  const [form, setForm] = useState({ category: 'Food', amount: '', date: today, notes: '', method: 'cash' });
   async function add() {
     if (!form.amount) return toast.error('Amount required');
+    if (form.date > today) return toast.error('Expense date cannot be in the future');
     const r = await api('expenses', { method: 'POST', body: JSON.stringify(form) });
     if (r.id) { toast.success('Expense added'); setForm({ ...form, amount: '', notes: '' }); onRefresh(); }
   }
@@ -688,7 +745,7 @@ function ExpensesView({ items, currency, onRefresh }) {
             <SelectContent>{EXPENSE_CATS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
           </Select>
           <Input type="number" placeholder="Amount" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
-          <Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+          <Input type="date" max={today} value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
           <Select value={form.method} onValueChange={v => setForm({ ...form, method: v })}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent><SelectItem value="cash">Cash</SelectItem><SelectItem value="upi">UPI</SelectItem><SelectItem value="card">Card</SelectItem><SelectItem value="bank">Bank</SelectItem></SelectContent>
@@ -726,9 +783,11 @@ function ExpensesView({ items, currency, onRefresh }) {
 }
 
 function IncomeView({ items, currency, onRefresh }) {
-  const [form, setForm] = useState({ category: 'Salary', amount: '', date: new Date().toISOString().slice(0, 10), source: '', notes: '' });
+  const today = new Date().toISOString().slice(0, 10);
+  const [form, setForm] = useState({ category: 'Salary', amount: '', date: today, source: '', notes: '' });
   async function add() {
     if (!form.amount) return toast.error('Amount required');
+    if (form.date > today) return toast.error('Income date cannot be in the future');
     const r = await api('income', { method: 'POST', body: JSON.stringify(form) });
     if (r.id) { toast.success('Income added'); setForm({ ...form, amount: '', source: '', notes: '' }); onRefresh(); }
   }
@@ -854,16 +913,16 @@ function AIView() {
 function LoginScreen() {
   function login() {
     const redirect = `${window.location.origin}/auth/callback`;
-    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirect)}`;
+    window.location.href = `https://auth.emergentagent.com/?app_name=${encodeURIComponent('MoneyMate')}&redirect=${encodeURIComponent(redirect)}`;
   }
   return (
     <div className="min-h-screen bg-gradient-to-br from-violet-50 via-white to-fuchsia-50 flex items-center justify-center p-6">
       <div className="max-w-5xl w-full grid md:grid-cols-2 gap-12 items-center">
         <div>
           <div className="flex items-center gap-2 mb-6">
-            <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-violet-600 to-fuchsia-600 flex items-center justify-center text-white font-bold text-xl shadow-lg">L</div>
+            <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-violet-600 to-fuchsia-600 flex items-center justify-center text-white font-bold text-xl shadow-lg">M</div>
             <div>
-              <div className="font-bold text-2xl">Ledgr</div>
+              <div className="font-bold text-2xl">MoneyMate</div>
               <div className="text-xs text-slate-500 uppercase tracking-widest">AI Finance</div>
             </div>
           </div>
@@ -1113,6 +1172,95 @@ function ActivityView({ currency }) {
   );
 }
 
+function GlobalSearch({ borrowers, loans, onSelectBorrower, onSelectLoan, currency }) {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(false);
+
+  const results = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    if (!term) return { borrowers: [], loans: [] };
+    const bMatches = (borrowers || []).filter(b =>
+      (b.name || '').toLowerCase().includes(term) ||
+      (b.phone || '').toLowerCase().includes(term) ||
+      (b.email || '').toLowerCase().includes(term) ||
+      (b.notes || '').toLowerCase().includes(term) ||
+      (b.address || '').toLowerCase().includes(term)
+    ).slice(0, 6);
+    const lMatches = (loans || []).filter(l => {
+      const name = (l.borrower?.name || '').toLowerCase();
+      const notes = (l.notes || '').toLowerCase();
+      const amount = String(l.principal || '');
+      return name.includes(term) || notes.includes(term) || amount.includes(term) || (l.id || '').toLowerCase().startsWith(term);
+    }).slice(0, 6);
+    return { borrowers: bMatches, loans: lMatches };
+  }, [q, borrowers, loans]);
+
+  const totalResults = results.borrowers.length + results.loans.length;
+
+  return (
+    <div className="hidden md:flex items-center gap-2 flex-1 max-w-md relative">
+      <div className="relative flex-1">
+        <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        <Input
+          placeholder="Search contacts, loans, notes, amounts..."
+          className="pl-9 pr-9 bg-slate-50 border-slate-200"
+          value={q}
+          onChange={e => { setQ(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 200)}
+        />
+        {q && <button onClick={() => { setQ(''); setOpen(false); }} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X className="h-3.5 w-3.5" /></button>}
+      </div>
+
+      {open && q && (
+        <div className="absolute top-full left-0 right-0 mt-2 bg-white border rounded-xl shadow-2xl overflow-hidden z-50 max-h-[70vh] overflow-y-auto">
+          {totalResults === 0 ? (
+            <div className="p-6 text-center text-sm text-slate-500">No results for "{q}"</div>
+          ) : (
+            <>
+              {results.borrowers.length > 0 && (
+                <div>
+                  <div className="px-3 py-2 text-[10px] font-semibold text-slate-500 uppercase tracking-wider bg-slate-50 border-b">Contacts ({results.borrowers.length})</div>
+                  {results.borrowers.map(b => (
+                    <button key={b.id} onMouseDown={() => { onSelectBorrower(b); setOpen(false); setQ(''); }} className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-violet-50 border-b last:border-b-0 text-left">
+                      <Avatar className="h-8 w-8"><AvatarFallback className="bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white text-xs">{b.name[0].toUpperCase()}</AvatarFallback></Avatar>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{b.name}</div>
+                        <div className="text-xs text-slate-500 truncate">{b.phone || b.email || 'No contact info'}</div>
+                      </div>
+                      {b.outstanding > 0 && <div className="text-xs font-semibold text-red-600">{fmt(b.outstanding, currency)}</div>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {results.loans.length > 0 && (
+                <div>
+                  <div className="px-3 py-2 text-[10px] font-semibold text-slate-500 uppercase tracking-wider bg-slate-50 border-b border-t">Loans ({results.loans.length})</div>
+                  {results.loans.map(l => (
+                    <button key={l.id} onMouseDown={() => { onSelectLoan(l); setOpen(false); setQ(''); }} className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-violet-50 border-b last:border-b-0 text-left">
+                      <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${l.type === 'given' ? 'bg-violet-100 text-violet-700' : 'bg-orange-100 text-orange-700'}`}>
+                        {l.type === 'given' ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownLeft className="h-4 w-4" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{l.borrower?.name || 'Unknown'} • {fmt(l.principal, l.currency)}</div>
+                        <div className="text-xs text-slate-500 truncate">
+                          {l.type === 'given' ? 'Lent' : 'Borrowed'} • {new Date(l.loan_date).toLocaleDateString()}
+                          {l.notes ? ` • ${l.notes}` : ''}
+                        </div>
+                      </div>
+                      <Badge variant="outline" className="text-[10px]">{l.computed?.status?.replace('_', ' ')}</Badge>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -1157,10 +1305,8 @@ function App() {
       <Sidebar tab={tab} setTab={setTab} user={user} onLogout={logout} />
       <main className="flex-1">
         <header className="sticky top-0 z-10 border-b bg-white/80 backdrop-blur px-6 py-3 flex items-center justify-between">
-          <div className="md:hidden font-bold text-lg">Ledgr</div>
-          <div className="hidden md:flex items-center gap-2 flex-1 max-w-md">
-            <div className="relative flex-1"><Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><Input placeholder="Search contacts, loans, notes..." className="pl-9 bg-slate-50 border-slate-200" /></div>
-          </div>
+          <div className="md:hidden font-bold text-lg">MoneyMate</div>
+          <GlobalSearch borrowers={borrowers} loans={loans} onSelectBorrower={(b) => { setTab('borrowers'); }} onSelectLoan={(l) => setActiveLoan(l)} currency={currency} />
           <div className="flex items-center gap-2">
             <Select value={currency} onValueChange={setCurrency}>
               <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>

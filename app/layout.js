@@ -2,10 +2,10 @@ import './globals.css';
 import { Toaster } from '@/components/ui/sonner';
 
 export const metadata = {
-  title: 'Ledgr — Smart Expense & Loan Manager',
+  title: 'MoneyMate — Smart Expense & Loan Manager',
   description: 'AI-powered digital ledger for loans, expenses, income, and financial insights.',
   manifest: '/manifest.json',
-  appleWebApp: { capable: true, statusBarStyle: 'default', title: 'Ledgr' },
+  appleWebApp: { capable: true, statusBarStyle: 'default', title: 'MoneyMate' },
   icons: { icon: '/icon-192.svg', apple: '/icon-192.svg' },
 };
 
