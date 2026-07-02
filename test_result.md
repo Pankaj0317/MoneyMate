@@ -173,6 +173,17 @@ frontend:
     status_history:
         -working: "NA"
         -agent: "main"
+  - task: "Bulk Repayment endpoint POST /api/borrowers/:id/bulk-repayment (with preview mode)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "Verified via curl end-to-end. Supports 5 strategies: oldest (FIFO, default), newest (LIFO), highest_interest, proportional, manual. Body accepts {amount, strategy, method, date, notes, preview, loan_type, selected_loan_ids?, manual_allocations?}. Preview mode returns full allocation with before/after outstanding, fully_settled flag, unallocated amount. Commit mode persists linked repayment records sharing a bulk_payment_id, stores audit record in bulk_payments collection, logs activity. Verified: (1) 8000 oldest across 5k+3k+2k loans correctly settles first loan (5,276.16 including interest) then partial 2nd (2,723.84). (2) highest_interest correctly sorts 18%→12%→0%. (3) proportional splits at 48.4% per loan for 5000 payment. (4) Overpayment 15000 on 10.3k outstanding flags 4,662.69 as unallocated. User-scoped via uid filter. Frontend: Bulk Payment button on each borrower card with outstanding balance, opens modal with live preview."
         -comment: "Login gate renders beautifully. Sign-in button redirects to auth.emergentagent.com successfully (verified via screenshot). Callback page exchanges session_id. Sidebar shows user avatar + logout. Calendar view shows monthly grid with due dates, payments, expenses, income. Reminder button in loan detail. PWA manifest + service worker configured. User has not explicitly requested frontend testing yet."
 
 metadata:
