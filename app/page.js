@@ -19,8 +19,9 @@ import {
 } from 'recharts';
 import {
   Wallet, TrendingUp, TrendingDown, Users, ArrowUpRight, ArrowDownLeft, PlusCircle, Sparkles,
-  Receipt, DollarSign, AlertTriangle, CheckCircle2, Clock, Trash2, Calendar, IndianRupee,
-  ChevronRight, Zap, Brain, Target, Bell, BadgeCheck, BadgeAlert, Search
+  Receipt, DollarSign, AlertTriangle, CheckCircle2, Clock, Trash2, Calendar as CalIcon, IndianRupee,
+  ChevronRight, Zap, Brain, Target, Bell, BadgeCheck, BadgeAlert, Search, Mail, LogOut, LogIn,
+  ChevronLeft, Send, Download
 } from 'lucide-react';
 
 const CURRENCIES = { INR: '₹', USD: '$', EUR: '€', GBP: '£', AED: 'AED ' };
@@ -59,13 +60,14 @@ const StatCard = ({ icon: Icon, label, value, sub, gradient, trend }) => (
   </Card>
 );
 
-function Sidebar({ tab, setTab }) {
+function Sidebar({ tab, setTab, user, onLogout }) {
   const nav = [
     { id: 'dashboard', label: 'Dashboard', icon: Zap },
     { id: 'loans', label: 'Loans', icon: Wallet },
     { id: 'borrowers', label: 'Contacts', icon: Users },
     { id: 'expenses', label: 'Expenses', icon: Receipt },
     { id: 'income', label: 'Income', icon: DollarSign },
+    { id: 'calendar', label: 'Calendar', icon: CalIcon },
     { id: 'ai', label: 'AI Insights', icon: Sparkles },
   ];
   return (
@@ -85,10 +87,24 @@ function Sidebar({ tab, setTab }) {
           </button>
         ))}
       </nav>
-      <div className="mt-auto rounded-xl bg-gradient-to-br from-violet-600 to-fuchsia-600 p-4 text-white">
-        <Brain className="h-5 w-5 mb-2" />
-        <div className="font-semibold text-sm">AI-Powered Insights</div>
-        <div className="text-xs text-white/80 mt-1">Claude Sonnet 4.5 analyzes your data.</div>
+      <div className="mt-auto space-y-3">
+        <div className="rounded-xl bg-gradient-to-br from-violet-600 to-fuchsia-600 p-4 text-white">
+          <Brain className="h-5 w-5 mb-2" />
+          <div className="font-semibold text-sm">AI-Powered Insights</div>
+          <div className="text-xs text-white/80 mt-1">Gemini 2.5 Flash analyzes your data.</div>
+        </div>
+        {user && (
+          <div className="rounded-xl border bg-white p-3 flex items-center gap-2">
+            <Avatar className="h-9 w-9">
+              {user.picture ? <img src={user.picture} alt="" className="h-full w-full object-cover" /> : <AvatarFallback className="bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white text-sm">{user.name?.[0]?.toUpperCase() || 'U'}</AvatarFallback>}
+            </Avatar>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium truncate">{user.name}</div>
+              <div className="text-xs text-slate-500 truncate">{user.email}</div>
+            </div>
+            <Button variant="ghost" size="sm" onClick={onLogout} title="Sign out"><LogOut className="h-4 w-4" /></Button>
+          </div>
+        )}
       </div>
     </aside>
   );
@@ -313,6 +329,9 @@ function LoanDetail({ loan, onClose, onRefresh, currency }) {
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState('cash');
   const [notes, setNotes] = useState('');
+  const [sending, setSending] = useState(false);
+  const [reminderEmail, setReminderEmail] = useState(loan.borrower?.email || '');
+  const [showReminder, setShowReminder] = useState(false);
 
   async function pay() {
     if (!amount) return toast.error('Enter amount');
@@ -324,6 +343,15 @@ function LoanDetail({ loan, onClose, onRefresh, currency }) {
     if (!confirm('Delete this loan?')) return;
     await api(`loans/${loan.id}`, { method: 'DELETE' });
     toast.success('Deleted'); onClose(); onRefresh();
+  }
+  async function sendReminder() {
+    if (!reminderEmail) return toast.error('Enter recipient email');
+    setSending(true);
+    try {
+      const r = await api(`loans/${loan.id}/reminder`, { method: 'POST', body: JSON.stringify({ to: reminderEmail }) });
+      if (r.success) { toast.success(`Reminder email sent to ${reminderEmail}`); setShowReminder(false); }
+      else toast.error(r.error || 'Failed to send');
+    } finally { setSending(false); }
   }
 
   return (
@@ -339,8 +367,8 @@ function LoanDetail({ loan, onClose, onRefresh, currency }) {
 
         <div className="text-xs text-slate-500">
           {loan.interest_type === 'none' ? 'No interest' : `${loan.interest_type} interest at ${loan.interest_rate}% p.a.`}
-          {' • '}{loan.computed.days_elapsed} days elapsed
-          {loan.due_date && ` • Due ${new Date(loan.due_date).toLocaleDateString()}`}
+          {' \u2022 '}{loan.computed.days_elapsed} days elapsed
+          {loan.due_date && ` \u2022 Due ${new Date(loan.due_date).toLocaleDateString()}`}
         </div>
 
         <div className="border rounded-lg p-4 bg-slate-50">
@@ -354,6 +382,24 @@ function LoanDetail({ loan, onClose, onRefresh, currency }) {
             <Button onClick={pay} className="bg-gradient-to-r from-emerald-500 to-teal-600">Add Payment</Button>
           </div>
         </div>
+
+        {loan.type === 'given' && loan.computed.outstanding > 0 && (
+          <div className="border rounded-lg p-4 bg-gradient-to-br from-violet-50 to-fuchsia-50">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-semibold text-sm flex items-center gap-2"><Mail className="h-4 w-4 text-violet-600" />Send Email Reminder</div>
+                <div className="text-xs text-slate-600 mt-1">Nicely formatted payment reminder with outstanding balance</div>
+              </div>
+              {!showReminder && <Button size="sm" onClick={() => setShowReminder(true)} className="bg-gradient-to-r from-violet-600 to-fuchsia-600">Compose</Button>}
+            </div>
+            {showReminder && (
+              <div className="mt-3 flex gap-2">
+                <Input type="email" placeholder="recipient@example.com" value={reminderEmail} onChange={e => setReminderEmail(e.target.value)} />
+                <Button onClick={sendReminder} disabled={sending} className="bg-gradient-to-r from-violet-600 to-fuchsia-600"><Send className="h-4 w-4 mr-1" />{sending ? 'Sending...' : 'Send'}</Button>
+              </div>
+            )}
+          </div>
+        )}
 
         <div>
           <div className="font-semibold text-sm mb-2">Payment History ({loan.repayments.length})</div>
@@ -574,7 +620,7 @@ function AIView() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2"><Sparkles className="h-7 w-7 text-fuchsia-600" />AI Insights</h1>
-          <p className="text-sm text-slate-500 mt-1">Claude Sonnet 4.5 analyzes your financial data and gives sharp, actionable insights.</p>
+          <p className="text-sm text-slate-500 mt-1">Gemini 2.5 Flash analyzes your financial data and gives sharp, actionable insights.</p>
         </div>
         <Button onClick={generate} disabled={loading} className="bg-gradient-to-r from-violet-600 to-fuchsia-600">
           <Sparkles className="h-4 w-4 mr-2" />{loading ? 'Analyzing...' : insights.length ? 'Regenerate' : 'Generate Insights'}
@@ -627,7 +673,161 @@ function AIView() {
   );
 }
 
+function LoginScreen() {
+  function login() {
+    const redirect = `${window.location.origin}/auth/callback`;
+    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirect)}`;
+  }
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-violet-50 via-white to-fuchsia-50 flex items-center justify-center p-6">
+      <div className="max-w-5xl w-full grid md:grid-cols-2 gap-12 items-center">
+        <div>
+          <div className="flex items-center gap-2 mb-6">
+            <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-violet-600 to-fuchsia-600 flex items-center justify-center text-white font-bold text-xl shadow-lg">L</div>
+            <div>
+              <div className="font-bold text-2xl">Ledgr</div>
+              <div className="text-xs text-slate-500 uppercase tracking-widest">AI Finance</div>
+            </div>
+          </div>
+          <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-slate-900">Your money, <span className="bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-transparent">clearly organized</span>.</h1>
+          <p className="mt-4 text-slate-600 text-lg">Track loans lent & borrowed, auto-calculate interest, send payment reminders, and get AI-powered insights on your spending — all in one beautiful ledger.</p>
+          <div className="mt-8 flex flex-col sm:flex-row gap-3">
+            <Button onClick={login} size="lg" className="bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:opacity-90 text-white shadow-lg h-12 px-6">
+              <LogIn className="h-4 w-4 mr-2" />Sign in with Google
+            </Button>
+          </div>
+          <div className="mt-8 grid grid-cols-3 gap-4 text-sm">
+            <div className="flex items-start gap-2"><Wallet className="h-4 w-4 text-violet-600 mt-0.5" /><span>Interest engine (simple & compound)</span></div>
+            <div className="flex items-start gap-2"><Sparkles className="h-4 w-4 text-fuchsia-600 mt-0.5" /><span>Gemini 2.5 Flash insights</span></div>
+            <div className="flex items-start gap-2"><Mail className="h-4 w-4 text-emerald-600 mt-0.5" /><span>Email payment reminders</span></div>
+          </div>
+        </div>
+        <div className="hidden md:block">
+          <div className="relative">
+            <div className="absolute inset-0 bg-gradient-to-br from-violet-600 to-fuchsia-600 blur-3xl opacity-20 rounded-full" />
+            <Card className="relative shadow-2xl border-0">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between mb-4"><div className="text-xs uppercase tracking-widest text-slate-500">Total Outstanding</div><Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">Live</Badge></div>
+                <div className="text-4xl font-bold bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-transparent">₹42,012.33</div>
+                <div className="text-xs text-slate-500 mt-1">across 3 borrowers</div>
+                <div className="mt-5 grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-lg bg-violet-50 p-3"><div className="text-xs text-slate-500">Lent</div><div className="font-bold text-violet-700">₹50K</div></div>
+                  <div className="rounded-lg bg-emerald-50 p-3"><div className="text-xs text-slate-500">Interest</div><div className="font-bold text-emerald-700">₹1.5K</div></div>
+                  <div className="rounded-lg bg-blue-50 p-3"><div className="text-xs text-slate-500">Received</div><div className="font-bold text-blue-700">₹10K</div></div>
+                </div>
+                <div className="mt-4 p-3 rounded-lg bg-gradient-to-br from-violet-50 to-fuchsia-50 border border-violet-100">
+                  <div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-fuchsia-600" /><span className="text-xs font-semibold text-slate-700">AI Insight</span></div>
+                  <div className="text-xs text-slate-600 mt-1">Your savings rate is 98.4% — consider investing the surplus into diversified assets.</div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CalendarView({ currency, onOpenLoan }) {
+  const [month, setMonth] = useState(new Date());
+  const [data, setData] = useState({ loan_due_dates: [], expenses: [], income: [], repayments: [] });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    api('calendar').then(d => { setData(d || { loan_due_dates: [], expenses: [], income: [], repayments: [] }); setLoading(false); });
+  }, []);
+
+  const y = month.getFullYear();
+  const m = month.getMonth();
+  const first = new Date(y, m, 1);
+  const startWeekday = first.getDay();
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+
+  const eventsByDay = useMemo(() => {
+    const map = {};
+    const push = (d, ev) => {
+      const day = new Date(d);
+      if (day.getFullYear() !== y || day.getMonth() !== m) return;
+      const key = day.getDate();
+      (map[key] = map[key] || []).push(ev);
+    };
+    (data.loan_due_dates || []).forEach(l => { if (l.due_date) push(l.due_date, { kind: 'due', label: `Due: ${l.borrower?.name || 'Loan'}`, color: l.computed?.status === 'overdue' ? 'bg-red-500' : 'bg-amber-500', amount: l.computed?.outstanding, currency: l.currency, ref: l }); });
+    (data.repayments || []).forEach(r => push(r.date, { kind: 'payment', label: 'Payment received', color: 'bg-emerald-500', amount: r.amount, currency: 'INR' }));
+    (data.expenses || []).forEach(e => push(e.date, { kind: 'expense', label: e.category, color: 'bg-rose-500', amount: e.amount, currency: 'INR' }));
+    (data.income || []).forEach(i => push(i.date, { kind: 'income', label: i.category, color: 'bg-blue-500', amount: i.amount, currency: 'INR' }));
+    return map;
+  }, [data, y, m]);
+
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const today = new Date();
+  const isToday = (d) => today.getFullYear() === y && today.getMonth() === m && today.getDate() === d;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Calendar</h1>
+          <p className="text-sm text-slate-500 mt-1">Due dates, payments, expenses & income — all in one view.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setMonth(new Date(y, m - 1, 1))}><ChevronLeft className="h-4 w-4" /></Button>
+          <div className="font-semibold w-40 text-center">{month.toLocaleString('en-US', { month: 'long', year: 'numeric' })}</div>
+          <Button variant="outline" size="sm" onClick={() => setMonth(new Date(y, m + 1, 1))}><ChevronRight className="h-4 w-4" /></Button>
+          <Button variant="outline" size="sm" onClick={() => setMonth(new Date())}>Today</Button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-3 text-xs">
+        <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-amber-500" />Due date</div>
+        <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-red-500" />Overdue</div>
+        <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />Payment received</div>
+        <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-blue-500" />Income</div>
+        <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-rose-500" />Expense</div>
+      </div>
+
+      <Card>
+        <CardContent className="p-4">
+          {loading ? <div className="text-center text-slate-400 py-12">Loading calendar...</div> : (
+            <>
+              <div className="grid grid-cols-7 gap-1 mb-2">
+                {dayNames.map(n => <div key={n} className="text-xs font-semibold text-slate-500 text-center py-2">{n}</div>)}
+              </div>
+              <div className="grid grid-cols-7 gap-1">
+                {cells.map((d, i) => (
+                  <div key={i} className={`min-h-[90px] rounded-lg border p-1.5 ${d === null ? 'bg-slate-50/50 border-transparent' : 'bg-white hover:bg-slate-50'} ${isToday(d) ? 'ring-2 ring-violet-500 bg-violet-50' : ''}`}>
+                    {d !== null && (
+                      <>
+                        <div className={`text-xs font-semibold mb-1 ${isToday(d) ? 'text-violet-700' : 'text-slate-700'}`}>{d}</div>
+                        <div className="space-y-0.5">
+                          {(eventsByDay[d] || []).slice(0, 3).map((ev, ei) => (
+                            <div key={ei} onClick={() => ev.ref && onOpenLoan(ev.ref)} className={`text-[10px] rounded px-1 py-0.5 text-white truncate ${ev.color} ${ev.ref ? 'cursor-pointer' : ''}`} title={ev.label}>
+                              {ev.label}{ev.amount ? ` \u2022 ${fmt(ev.amount, ev.currency)}` : ''}
+                            </div>
+                          ))}
+                          {(eventsByDay[d]?.length || 0) > 3 && <div className="text-[10px] text-slate-500">+{eventsByDay[d].length - 3} more</div>}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function App() {
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [tab, setTab] = useState('dashboard');
   const [currency, setCurrency] = useState('INR');
   const [dashboard, setDashboard] = useState(null);
@@ -644,11 +844,29 @@ function App() {
     setDashboard(d); setLoans(l || []); setBorrowers(b || []); setExpenses(e || []); setIncome(i || []);
   }
 
-  useEffect(() => { refresh(); }, []);
+  async function checkAuth() {
+    setAuthLoading(true);
+    try {
+      const r = await api('auth/me');
+      setUser(r.user);
+      if (r.user) refresh();
+    } finally { setAuthLoading(false); }
+  }
+
+  async function logout() {
+    await api('auth/logout', { method: 'POST' });
+    setUser(null);
+    toast.success('Signed out');
+  }
+
+  useEffect(() => { checkAuth(); }, []);
+
+  if (authLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="text-slate-500">Loading...</div></div>;
+  if (!user) return <LoginScreen />;
 
   return (
     <div className="flex min-h-screen bg-slate-50">
-      <Sidebar tab={tab} setTab={setTab} />
+      <Sidebar tab={tab} setTab={setTab} user={user} onLogout={logout} />
       <main className="flex-1">
         <header className="sticky top-0 z-10 border-b bg-white/80 backdrop-blur px-6 py-3 flex items-center justify-between">
           <div className="md:hidden font-bold text-lg">Ledgr</div>
@@ -660,12 +878,17 @@ function App() {
               <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
               <SelectContent>{Object.keys(CURRENCIES).map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
             </Select>
+            <div className="md:hidden">
+              <Avatar className="h-8 w-8" onClick={logout}>
+                {user.picture ? <img src={user.picture} alt="" className="h-full w-full object-cover" /> : <AvatarFallback className="bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white text-xs">{user.name?.[0]?.toUpperCase() || 'U'}</AvatarFallback>}
+              </Avatar>
+            </div>
           </div>
         </header>
 
         {/* Mobile nav */}
         <div className="md:hidden flex overflow-x-auto gap-1 p-2 border-b bg-white">
-          {[['dashboard', 'Dashboard'], ['loans', 'Loans'], ['borrowers', 'Contacts'], ['expenses', 'Expenses'], ['income', 'Income'], ['ai', 'AI']].map(([id, l]) => (
+          {[['dashboard', 'Dashboard'], ['loans', 'Loans'], ['borrowers', 'Contacts'], ['expenses', 'Expenses'], ['income', 'Income'], ['calendar', 'Calendar'], ['ai', 'AI']].map(([id, l]) => (
             <button key={id} onClick={() => setTab(id)} className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === id ? 'bg-violet-600 text-white' : 'bg-slate-100'}`}>{l}</button>
           ))}
         </div>
@@ -676,6 +899,7 @@ function App() {
           {tab === 'borrowers' && <BorrowersView borrowers={borrowers} currency={currency} onRefresh={refresh} />}
           {tab === 'expenses' && <ExpensesView items={expenses} currency={currency} onRefresh={refresh} />}
           {tab === 'income' && <IncomeView items={income} currency={currency} onRefresh={refresh} />}
+          {tab === 'calendar' && <CalendarView currency={currency} onOpenLoan={setActiveLoan} />}
           {tab === 'ai' && <AIView />}
         </div>
 
